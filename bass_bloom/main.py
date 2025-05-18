@@ -1,70 +1,76 @@
 import os
 import time
-import yt_dlp
 from pydub import AudioSegment
 import numpy as np
 import pygame
+import random
+from utils import is_cuda_available, is_cloud_environment
 
 from analyzer_cpu import compute_bass_energy
-from visualizer import draw_gradient
+from visualizer import draw_gradient_by_theme
 
-CHUNK_MS = 50  # simulate 20 FPS (50ms per frame)
+CHUNK_MS = 50  # 20 FPS
+WIDTH, HEIGHT = 800, 600
 
-# === STEP 1: Download & Convert YouTube Audio ===
-def download_audio(youtube_url, output_path='output.wav'):
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': 'temp_audio.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-        }],
-    }
+# === Get audio file and name ===
+print("\n🎵 Drop a .mp3 or .wav file into your project directory.")
+filename = input("Enter filename (with extension): ").strip()
+name = input("Enter your name: ").strip()
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        print("Downloading audio...")
-        ydl.download([youtube_url])
+# === Convert to WAV if needed ===
+if filename.endswith(".mp3"):
+    print("Converting MP3 to WAV...")
+    audio = AudioSegment.from_mp3(filename)
+    filename = "converted_temp.wav"
+    audio.export(filename, format="wav")
+else:
+    audio = AudioSegment.from_wav(filename)
+
+# === Theme detection ===
+def get_theme_color(name):
+    if name.lower() == "nvidia":
+        return "green"
+    elif name.lower() == "Gaby":
+        return "pink"
+    else:
+        return "random"
+
+theme = get_theme_color(name)
+
+# === Load audio and simulate ===
+samples = np.array(audio.get_array_of_samples())
+rate = audio.frame_rate
+chunk_size = int(rate * (CHUNK_MS / 1000.0))
+
+# === Visual Setup ===
+if is_cloud_environment():
+    print("🌩️ Detected cloud environment: disabling audio.")
+    print("Visualizer will run without audio.")
+    os.environ["SDL_AUDIODRIVER"] = "dummy"
+
+import pygame
+pygame.init()
+pygame.mixer.quit()
     
-    print("Converting to WAV...")
-    audio = AudioSegment.from_mp3('temp_audio.mp3')
-    audio.export(output_path, format='wav')
-    os.remove('temp_audio.mp3')
-    print("Conversion done!")
+pygame.init()
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Bass Bloom")
+clock = pygame.time.Clock()
 
-# === STEP 2: Simulate Real-Time Bass Visualization ===
-def simulate_visualizer(wav_path):
-    # Load audio
-    audio = AudioSegment.from_wav(wav_path)
-    samples = np.array(audio.get_array_of_samples())
-    rate = audio.frame_rate
-    chunk_size = int(rate * (CHUNK_MS / 1000.0))
+# === Loop Through Audio ===
+for i in range(0, len(samples), chunk_size):
+    chunk = samples[i:i+chunk_size].astype(np.int16).tobytes()
+    bass = compute_bass_energy(chunk, rate)
 
-    # Init Pygame
-    pygame.init()
-    screen = pygame.display.set_mode((800, 600))
-    pygame.display.set_caption("Bass Bloom Visualizer")
-    clock = pygame.time.Clock()
+    draw_gradient_by_theme(screen, bass, WIDTH, HEIGHT, theme)
+    pygame.display.flip()
+    clock.tick(1000 // CHUNK_MS)
 
-    # Frame simulation
-    for i in range(0, len(samples), chunk_size):
-        chunk = samples[i:i+chunk_size].astype(np.int16).tobytes()
-        bass = compute_bass_energy(chunk, rate)
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            exit()
 
-        draw_gradient(screen, bass, 800, 600)
-        pygame.display.flip()
-        clock.tick(1000 // CHUNK_MS)
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                return
-
-    pygame.quit()
-
-# === MAIN FLOW ===
-if __name__ == "__main__":
-    url = input("Paste a YouTube link: ").strip()
-    wav_file = "converted_output.wav"
-
-    download_audio(url, wav_file)
-    simulate_visualizer(wav_file)
+pygame.quit()
+if os.path.exists("converted_temp.wav"):
+    os.remove("converted_temp.wav")
